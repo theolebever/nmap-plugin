@@ -8,6 +8,7 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	TFile,
 } from "obsidian";
 
 // obsidian-nmap-plugin.js
@@ -73,7 +74,7 @@ export default class Nmap extends Plugin {
 		//);
 	}
 
-	onunload() {}
+	onunload() { }
 
 	async loadSettings() {
 		this.settings = Object.assign(
@@ -184,7 +185,16 @@ class NmapModal extends Modal {
 			const hosts = result?.nmaprun?.host || [];
 
 			const targetFolder = await this.getUserSelectedFolder();
-			let canvas; // Declare canvas variable
+			let canvasFile = await this.createOrGetCanvas(targetFolder);
+
+			// Read canvas data once
+			const canvasContent = await this.app.vault.read(canvasFile);
+			const canvasData = JSON.parse(canvasContent);
+			canvasData.nodes = canvasData.nodes || [];
+
+			const fileCreationPromises = [];
+			const newNodes: any[] = [];
+
 			for (const host of hosts) {
 				const hostname =
 					host?.hostnames?.[0]?.hostname?.[0]?.$.name || "Unknown";
@@ -197,18 +207,33 @@ class NmapModal extends Modal {
 					? `${targetFolder}/${fileName}`
 					: fileName;
 
-				const createdFile = await this.app.vault.create(
-					filePath,
-					pageContent
+				// Prepare file creation promise
+				fileCreationPromises.push(
+					this.app.vault.create(filePath, pageContent).then((createdFile) => {
+						// Prepare canvas node
+						const fileId = `file-${createdFile.path}`;
+						newNodes.push({
+							id: fileId,
+							type: "file",
+							file: createdFile.path,
+							width: 475,
+							height: 500,
+							x: Math.random() * 900, // Random X coordinate
+							y: Math.random() * 1000, // Random Y coordinate
+						});
+					})
 				);
-
-				// Add the file to the canvas
-				if (!canvas) {
-					canvas = await this.createOrGetCanvas(targetFolder);
-				}
-
-				await this.addFileToCanvas(canvas, createdFile);
 			}
+
+			// Wait for all files to be created
+			await Promise.all(fileCreationPromises);
+
+			// Append all new nodes and write canvas file once
+			canvasData.nodes.push(...newNodes);
+			await this.app.vault.modify(
+				canvasFile,
+				JSON.stringify(canvasData, null, 2)
+			);
 
 			new Notice("Nmap XML processed successfully!");
 		} catch (err) {
@@ -217,39 +242,21 @@ class NmapModal extends Modal {
 		}
 	}
 
-	async createOrGetCanvas(folder: any) {
+	async createOrGetCanvas(folder: any): Promise<TFile> {
 		const canvasName = "network.canvas";
 		const canvasPath = folder ? `${folder}/${canvasName}` : canvasName;
 
 		let canvasFile = this.app.vault.getAbstractFileByPath(canvasPath);
 
 		if (!canvasFile) {
-			await this.app.vault.create(canvasPath, "{}");
-			canvasFile = this.app.vault.getAbstractFileByPath(canvasPath);
+			canvasFile = await this.app.vault.create(canvasPath, "{}");
+		}
+
+		if (!(canvasFile instanceof TFile)) {
+			throw new Error(`${canvasPath} is not a file`);
 		}
 
 		return canvasFile;
-	}
-
-	async addFileToCanvas(canvas: any, file: any) {
-		const canvasData = JSON.parse(await this.app.vault.read(canvas));
-
-		const fileId = `file-${file.path}`;
-		canvasData.nodes = canvasData.nodes || [];
-		canvasData.nodes.push({
-			id: fileId,
-			type: "file",
-			file: file.path,
-			width: 475,
-			height: 500,
-			x: Math.random() * 900, // Random X coordinate
-			y: Math.random() * 1000, // Random Y coordinate
-		});
-
-		await this.app.vault.modify(
-			canvas,
-			JSON.stringify(canvasData, null, 2)
-		);
 	}
 
 	async getUserSelectedFolder() {
